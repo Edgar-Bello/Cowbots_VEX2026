@@ -78,67 +78,59 @@ void odomTask(void*) {
     }
 }
 
-void moveToPose(double targetX, double targetY, double targetTheta) {
+
+void moveToPoint(double targetX, double targetY) {
 
     double kP_xy = 1;
     double kD_xy = 1;
 
-    double kP_turn = 1;
-    double kD_turn = 1;
-
     double prevXErr = 0;
     double prevYErr = 0;
-    double prevTurnErr = 0;
 
     while (true) {
 
         double x = odomX;
         double y = odomY;
-        double theta = odomTheta;
 
         double dx = targetX - x;
         double dy = targetY - y;
 
-        double dist = sqrt(dx*dx + dy*dy);
+        double dist = sqrt(dx * dx + dy * dy);
 
-        double pathAngle = atan2(dy, dx);
-
-        double blend = std::min(dist / 24.0, 1.0);
-        double desiredTheta = blend * pathAngle + (1 - blend) * targetTheta;
-
-        double dtheta = desiredTheta - theta;
-        while (dtheta > M_PI) dtheta -= 2*M_PI;
-        while (dtheta < -M_PI) dtheta += 2*M_PI;
-
-        if (dist < 1.0 && fabs(targetTheta - theta) < 0.05) break;
+        // stop condition
+        if (dist < 1.0) break;
 
         // Field → robot frame
-        double robotX =  dx * cos(theta) + dy * sin(theta);
-        double robotY = -dx * sin(theta) + dy * cos(theta);
+        double robotX = dx * cos(odomTheta) + dy * sin(odomTheta); //Change robotX to vx if not using PID
+        double robotY = -dx * sin(odomTheta) + dy * cos(odomTheta); //Change robotY to vy if not using PID
 
-        double dX = robotX - prevXErr;
-        double dY = robotY - prevYErr;
-        double dTurn = dtheta - prevTurnErr;
+        // Derivative (for damping)
+        double dX = robotX - prevXErr; //Use for D in PID
+        double dY = robotY - prevYErr; //Use for D in PID
 
-        prevXErr = robotX;
-        prevYErr = robotY;
-        prevTurnErr = dtheta;
+        prevXErr = robotX;  //Use for D in PID
+        prevYErr = robotY;  //Use for D in PID
 
-        double vx = kP_xy * robotX + kD_xy * dX;
-        double vy = kP_xy * robotY + kD_xy * dY;
-        double omega = kP_turn * dtheta + kD_turn * dTurn;
+        // PID (PD actually)
+        double vx = kP_xy * robotX + kD_xy * dX; //Use for PID
+        double vy = kP_xy * robotY + kD_xy * dY; //Use for PID
 
-        // X-drive kinematics
-        double fl = vy + vx + omega;
-        double fr = vy - vx - omega;
-        double bl = vy - vx + omega;
-        double br = vy + vx - omega;
+        // X-drive kinematics (no rotation control)
+        double fl = vy + vx;
+        double fr = vy - vx;
+        double bl = vy - vx;
+        double br = vy + vx;
 
+        // normalize
         double maxVal = std::max({fabs(fl), fabs(fr), fabs(bl), fabs(br)});
         if (maxVal > 1) {
-            fl /= maxVal; fr /= maxVal; bl /= maxVal; br /= maxVal;
+            fl /= maxVal;
+            fr /= maxVal;
+            bl /= maxVal;
+            br /= maxVal;
         }
 
+        // send power
         frontLeft.move(fl * 127);
         frontRight.move(fr * 127);
         backLeft.move(bl * 127);
@@ -147,6 +139,7 @@ void moveToPose(double targetX, double targetY, double targetTheta) {
         delay(10);
     }
 
+    // stop robot
     frontLeft.brake();
     frontRight.brake();
     backLeft.brake();
@@ -185,7 +178,7 @@ void initialize() {
 }
 
 void autonomous() {
-    moveToPose(-2, 2, 0);
+    moveToPoint(-2, 2);
 }
 
 void opcontrol() {
@@ -194,7 +187,7 @@ void opcontrol() {
 
     imu_sensor.tare(); // Set current heading as 0°
 
-    while (true) {
+    while (true) { // comment
 
         // Debug: LCD button states
         pros::lcd::print(
