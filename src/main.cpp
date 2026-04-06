@@ -13,22 +13,31 @@ constexpr double WHEEL_CIRC = M_PI * WHEEL_DIAMETER;
 constexpr double TICKS_PER_REV = 36000.0;
 constexpr double INCHES_PER_TICK = WHEEL_CIRC / TICKS_PER_REV;
 
-constexpr double H_OFFSET = 2.5; // horizontal wheel offset (south)
+constexpr double H_OFFSET = 2.5; // horizontal wheel offset (south), will probably change
 
 double odomX = 0;
 double odomY = 0;
 double odomTheta = 0; // radians
 
-Motor frontLeft(2, MotorGearset::green);
-Motor frontRight(-1, MotorGearset::green);
-Motor backLeft(4, MotorGearset::green);  
-Motor backRight(-3, MotorGearset::green);
+double limitspeed = 1.0;
+bool buttonPressedOnce = false;
+bool buttonPressedTwice = false; 
 
-IMU imu_sensor(14);
+MotorGroup frontLeft({3, 4}, MotorGearset::green);
+MotorGroup frontRight({-13, -14}, MotorGearset::green);
+MotorGroup backLeft({1, 2}, MotorGearset::green);  
+MotorGroup backRight({-11, -12}, MotorGearset::green);
 
-Rotation verticalRotation(11); 
-Rotation verticalRotation2(12);
-Rotation horizontalRotation(13);
+Motor upperIntakeRight(5, MotorGearset::green);
+Motor upperIntakeLeft(6, MotorGearset::green); //Might have to change
+
+Controller master(E_CONTROLLER_MASTER);
+
+IMU imu_sensor(14); //Might have to change
+
+Rotation verticalRotation(11); //Might have to change
+Rotation verticalRotation2(12); //Might have to change
+Rotation horizontalRotation(13);  //Might hvae to change
 
 void odomTask(void*) {
     int prevVL = verticalRotation.get_position();
@@ -78,11 +87,30 @@ void odomTask(void*) {
     }
 }
 
+void limitTask(void*) {
+    while (true) {
+        if(master.get_digital_new_press(DIGITAL_A)){
+            if(buttonPressedTwice){
+                limitspeed = 0.75;
+                buttonPressedTwice = false;
+            } else if(buttonPressedOnce){
+                limitspeed = 0.50;
+                buttonPressedOnce = false;
+                buttonPressedTwice = true;
+            } else {
+                limitspeed = 1.0;
+                buttonPressedOnce = true;
+            }
+        }
+        delay(20);
+    }
+}
+
 
 void moveToPoint(double targetX, double targetY) {
 
-    double kP_xy = 1;
-    double kD_xy = 1;
+    double kP_xy = 20;
+    double kD_xy = 5;
 
     double prevXErr = 0;
     double prevYErr = 0;
@@ -160,9 +188,16 @@ void encoderTask(void*) {
     }
 }
 
+void setBrakeMode(motor_brake_mode_e mode){
+    frontLeft.set_brake_mode(mode); //Might have to add the _all to these functions
+    frontRight.set_brake_mode(mode);
+    backLeft.set_brake_mode(mode);
+    backRight.set_brake_mode(mode);
+}
+
 void initialize() {
     lcd::initialize();
-    lcd::set_text(1, "Custom Odom Ready");
+    lcd::set_text(1, "Odometry is ready");
 
     imu_sensor.reset();
     verticalRotation.reset();
@@ -178,14 +213,19 @@ void initialize() {
 }
 
 void autonomous() {
+    setBrakeMode(E_MOTOR_BRAKE_BRAKE);
     moveToPoint(-2, 2);
+}
+
+void disabled(){
+    setBrakeMode(E_MOTOR_BRAKE_COAST);
 }
 
 void opcontrol() {
 
-	pros::Controller master(pros::E_CONTROLLER_MASTER);
-
+    setBrakeMode(E_MOTOR_BRAKE_BRAKE);
     imu_sensor.tare(); // Set current heading as 0°
+    Task limit_Task(limitTask); // I might have to move it inside the while and eliminate the task
 
     while (true) { // comment
 
@@ -227,41 +267,11 @@ void opcontrol() {
         }
 
         // Send power to motors
-        frontLeft.move(fl);
-        frontRight.move(fr);
-        backLeft.move(bl);
-        backRight.move(br);
+        frontLeft.move(fl * limitspeed);
+        frontRight.move(fr * limitspeed);
+        backLeft.move(bl * limitspeed);
+        backRight.move(br * limitspeed);
 
         pros::delay(20);
     }
-
-	/*
-
-    while (true) {
-        int forward = master.get_analog(ANALOG_LEFT_Y);
-        int strafe  = master.get_analog(ANALOG_LEFT_X);
-        int rotation = master.get_analog(ANALOG_RIGHT_X);
-
-        int fl = forward + strafe + rotation;
-        int fr = forward - strafe - rotation;
-        int bl = forward - strafe + rotation;
-        int br = forward + strafe - rotation;
-
-        double maxVal = std::max({abs(fl), abs(fr), abs(bl), abs(br)});
-        if (maxVal > 127) {
-            fl = fl * 127 / maxVal;
-            fr = fr * 127 / maxVal;
-            bl = bl * 127 / maxVal;
-            br = br * 127 / maxVal;
-        }
-
-        frontLeft.move(fl);
-        frontRight.move(fr);
-        backLeft.move(bl);
-        backRight.move(br);
-
-        delay(20);
-    }
-
-	*/
 }
