@@ -1,95 +1,113 @@
 #include "main.h"
-//#include "lemlib/api.hpp"
-#include "pros/imu.hpp"
-#include "pros/motors.hpp"
-#include "pros/rotation.hpp"
-#include "liblvgl/llemu.hpp"
 
 using namespace pros;
 
-constexpr double TRACK_WIDTH = 12.0; // distance between vertical wheels
-constexpr double WHEEL_DIAMETER = 2.125;
-constexpr double WHEEL_CIRC = M_PI * WHEEL_DIAMETER;
-constexpr double TICKS_PER_REV = 36000.0;
-constexpr double INCHES_PER_TICK = WHEEL_CIRC / TICKS_PER_REV;
+MotorGroup frontLeft({3, -4}, MotorGearset::green);
+MotorGroup frontRight({-1, 2}, MotorGearset::green);
+MotorGroup backLeft({5, -6}, MotorGearset::green);
+MotorGroup backRight({-7, 8}, MotorGearset::green);
 
-constexpr double H_OFFSET = 2.5; // horizontal wheel offset (south), will probably change
-
-double odomX = 0;
-double odomY = 0;
-double odomTheta = 0; // radians
-
-double limitspeed = 1.0;
-bool buttonPressedOnce = false;
-bool buttonPressedTwice = false; 
-
-MotorGroup frontLeft({3, 4}, MotorGearset::green);
-MotorGroup frontRight({-13, -14}, MotorGearset::green);
-MotorGroup backLeft({1, 2}, MotorGearset::green);  
-MotorGroup backRight({-11, -12}, MotorGearset::green);
-
-Motor upperIntakeRight(5, MotorGearset::green);
-Motor upperIntakeLeft(6, MotorGearset::green); //Might have to change
+Motor upperIntake(9, MotorGearset::green);
+Motor lowerIntake(10, MotorGearset::green);
 
 Controller master(E_CONTROLLER_MASTER);
 
-IMU imu_sensor(14); //Might have to change
+IMU imu_sensor(14);
 
-Rotation verticalRotation(11); //Might have to change
-Rotation verticalRotation2(12); //Might have to change
-Rotation horizontalRotation(13);  //Might hvae to change
+Rotation verticalRotation(11);
+Rotation verticalRotation2(12);
+Rotation horizontalRotation(13);
 
-void odomTask(void*) {
-    int prevVL = verticalRotation.get_position();
-    int prevVR = verticalRotation2.get_position();
-    int prevH  = horizontalRotation.get_position();
-    double prevIMU = imu_sensor.get_rotation();
+bool buttonPressedOnce = false;
+bool buttonPressedTwice = false;
+double limitspeed = 1.0;
 
-    while (true) {
-        int currVL = verticalRotation.get_position();
-        int currVR = verticalRotation2.get_position();
-        int currH  = horizontalRotation.get_position();
-        double currIMU = imu_sensor.get_rotation();
+void setBrakeMode(motor_brake_mode_e mode){
+    frontLeft.set_brake_mode(mode); //Might have to add the _all to these functions
+    frontRight.set_brake_mode(mode);
+    backLeft.set_brake_mode(mode);
+    backRight.set_brake_mode(mode);
+}
 
-        // Convert ticks → inches
-        double dVL = (currVL - prevVL) * INCHES_PER_TICK;
-        double dVR = (currVR - prevVR) * INCHES_PER_TICK;
-        double dH  = (currH  - prevH ) * INCHES_PER_TICK;
 
-        // Heading change (deg → rad)
-        double dTheta = (currIMU - prevIMU) * M_PI / 180.0;
-
-        // Forward movement
-        double dForward = (dVL + dVR) / 2.0;
-
-        // Correct horizontal wheel for rotation
-        double dStrafe = dH - dTheta * H_OFFSET;
-
-        // Midpoint integration (more accurate)
-        double avgTheta = odomTheta + dTheta / 2.0;
-
-        // Convert to field coordinates
-        odomX += dStrafe * cos(avgTheta) - dForward * sin(avgTheta);
-        odomY += dStrafe * sin(avgTheta) + dForward * cos(avgTheta);
-        odomTheta += dTheta;
-
-        // Wrap angle
-        while (odomTheta > M_PI) odomTheta -= 2 * M_PI;
-        while (odomTheta < -M_PI) odomTheta += 2 * M_PI;
-
-        // Save previous
-        prevVL = currVL;
-        prevVR = currVR;
-        prevH  = currH;
-        prevIMU = currIMU;
-
-        delay(10);
+void on_center_button() {
+    static bool pressed = false;
+    pressed = !pressed;
+    if (pressed) {
+        pros::lcd::set_text(2, "I was pressed!");
+    } else {
+        pros::lcd::clear_line(2);
     }
 }
 
-void limitTask(void*) {
+void initialize() {
+    pros::lcd::initialize();
+    pros::lcd::set_text(1, "Hello Cowbots!");
+    pros::lcd::register_btn1_cb(on_center_button);
+
+    imu_sensor.reset();
+    verticalRotation.reset();
+    verticalRotation2.reset();
+    horizontalRotation.reset();
+    verticalRotation.reverse();
+    setBrakeMode(MOTOR_BRAKE_BRAKE);
+
+    while (imu_sensor.is_calibrating()) {
+        pros::delay(10);
+    }
+    pros::delay(200);
+}
+
+void disabled() {
+    setBrakeMode(MOTOR_BRAKE_COAST);
+}
+void competition_initialize() {}
+void autonomous() {}
+
+void opcontrol() {
     while (true) {
-        if(master.get_digital_new_press(DIGITAL_A)){
+        pros::lcd::print(
+            0, "%d %d %d",
+            (pros::lcd::read_buttons() & LCD_BTN_LEFT) >> 2,
+            (pros::lcd::read_buttons() & LCD_BTN_CENTER) >> 1,
+            (pros::lcd::read_buttons() & LCD_BTN_RIGHT) >> 0
+        );
+
+        double forward  = -master.get_analog(ANALOG_LEFT_Y);
+        double strafe   = -master.get_analog(ANALOG_LEFT_X);
+        double rotation = -master.get_analog(ANALOG_RIGHT_X);
+
+        //double rad = imu_sensor.get_rotation() * M_PI / 180.0;
+
+        //double temp = forward * cos(rad) + strafe * sin(rad);
+        //strafe = -forward * sin(rad) + strafe * cos(rad);
+        //forward = temp;
+
+        double fl = forward + strafe + rotation;
+        double fr = forward - strafe - rotation;
+        double bl = forward - strafe + rotation;
+        double br = forward + strafe - rotation;
+
+        double maxVal = std::max({std::abs(fl), std::abs(fr), std::abs(bl), std::abs(br)});
+        if (maxVal > 127) {
+            fl = fl * 127.0 / maxVal;
+            fr = fr * 127.0 / maxVal;
+            bl = bl * 127.0 / maxVal;
+            br = br * 127.0 / maxVal;
+        }
+
+        if(master.get_digital(DIGITAL_A)) {
+            upperIntake.move(100); //Max 127
+            lowerIntake.move(100);
+        } else if(master.get_digital(DIGITAL_B)) {
+            upperIntake.move(-100);
+            lowerIntake.move(-100);
+        } else {
+            upperIntake.move(0);
+            lowerIntake.move(0);
+        }
+
+        if(master.get_digital_new_press(DIGITAL_R1)){
             if(buttonPressedTwice){
                 limitspeed = 0.75;
                 buttonPressedTwice = false;
@@ -102,176 +120,12 @@ void limitTask(void*) {
                 buttonPressedOnce = true;
             }
         }
-        delay(20);
-    }
-}
 
+        frontLeft.move((int)(fl * limitspeed));
+        frontRight.move((int)(fr * limitspeed));
+        backLeft.move((int)(bl * limitspeed));
+        backRight.move((int)(br * limitspeed));
 
-void moveToPoint(double targetX, double targetY) {
-
-    double kP_xy = 20;
-    double kD_xy = 5;
-
-    double prevXErr = 0;
-    double prevYErr = 0;
-
-    while (true) {
-
-        double x = odomX;
-        double y = odomY;
-
-        double dx = targetX - x;
-        double dy = targetY - y;
-
-        double dist = sqrt(dx * dx + dy * dy);
-
-        // stop condition
-        if (dist < 1.0) break;
-
-        // Field → robot frame
-        double robotX = dx * cos(odomTheta) + dy * sin(odomTheta); //Change robotX to vx if not using PID
-        double robotY = -dx * sin(odomTheta) + dy * cos(odomTheta); //Change robotY to vy if not using PID
-
-        // Derivative (for damping)
-        double dX = robotX - prevXErr; //Use for D in PID
-        double dY = robotY - prevYErr; //Use for D in PID
-
-        prevXErr = robotX;  //Use for D in PID
-        prevYErr = robotY;  //Use for D in PID
-
-        // PID (PD actually)
-        double vx = kP_xy * robotX + kD_xy * dX; //Use for PID
-        double vy = kP_xy * robotY + kD_xy * dY; //Use for PID
-
-        // X-drive kinematics (no rotation control)
-        double fl = vy + vx;
-        double fr = vy - vx;
-        double bl = vy - vx;
-        double br = vy + vx;
-
-        // normalize
-        double maxVal = std::max({fabs(fl), fabs(fr), fabs(bl), fabs(br)});
-        if (maxVal > 1) {
-            fl /= maxVal;
-            fr /= maxVal;
-            bl /= maxVal;
-            br /= maxVal;
-        }
-
-        // send power
-        frontLeft.move(fl * 127);
-        frontRight.move(fr * 127);
-        backLeft.move(bl * 127);
-        backRight.move(br * 127);
-
-        delay(10);
-    }
-
-    // stop robot
-    frontLeft.brake();
-    frontRight.brake();
-    backLeft.brake();
-    backRight.brake();
-}
-
-void encoderTask(void*) {
-    while (true) {
-        lcd::print(0, "X: %.2f", odomX);
-        lcd::print(1, "Y: %.2f", odomY);
-        lcd::print(2, "T: %.2f", odomTheta * 180 / M_PI);
-
-        lcd::print(3, "VL: %d", verticalRotation.get_position());
-        lcd::print(4, "VR: %d", verticalRotation2.get_position());
-        lcd::print(5, "H : %d", horizontalRotation.get_position());
-
-        delay(100);
-    }
-}
-
-void setBrakeMode(motor_brake_mode_e mode){
-    frontLeft.set_brake_mode(mode); //Might have to add the _all to these functions
-    frontRight.set_brake_mode(mode);
-    backLeft.set_brake_mode(mode);
-    backRight.set_brake_mode(mode);
-}
-
-void initialize() {
-    lcd::initialize();
-    lcd::set_text(1, "Odometry is ready");
-
-    imu_sensor.reset();
-    verticalRotation.reset();
-    verticalRotation2.reset();
-    horizontalRotation.reset();
-
-    verticalRotation.reverse(); // keep if needed
-
-    delay(2000); // allow IMU to calibrate
-
-    Task odom_task(odomTask);
-    Task screen_task(encoderTask);
-}
-
-void autonomous() {
-    setBrakeMode(E_MOTOR_BRAKE_BRAKE);
-    moveToPoint(-2, 2);
-}
-
-void disabled(){
-    setBrakeMode(E_MOTOR_BRAKE_COAST);
-}
-
-void opcontrol() {
-
-    setBrakeMode(E_MOTOR_BRAKE_BRAKE);
-    imu_sensor.tare(); // Set current heading as 0°
-    Task limit_Task(limitTask); // I might have to move it inside the while and eliminate the task
-
-    while (true) { // comment
-
-        // Debug: LCD button states
-        pros::lcd::print(
-            0, "%d %d %d",
-            (pros::lcd::read_buttons() & LCD_BTN_LEFT) >> 2,
-            (pros::lcd::read_buttons() & LCD_BTN_CENTER) >> 1,
-            (pros::lcd::read_buttons() & LCD_BTN_RIGHT) >> 0
-        );
-
-        // Controller inputs
-        int forward  = master.get_analog(ANALOG_LEFT_Y);   // Forward / backward
-        int strafe   = master.get_analog(ANALOG_LEFT_X);   // Left / right
-        int rotation = master.get_analog(ANALOG_RIGHT_X);  // Rotation
-
-        // IMU heading (degrees → radians)
-        double direction = imu_sensor.get_rotation();
-        double rad = direction * M_PI / 180.0;
-
-        // Field-centric transform
-        double temp = forward * cos(rad) + strafe * sin(rad);
-        strafe  = -forward * sin(rad) + strafe * cos(rad);
-        forward = temp;
-
-        // X-Drive motor calculations
-        int fl = forward + strafe + rotation;
-        int fr = forward - strafe - rotation;
-        int bl = forward - strafe + rotation;
-        int br = forward + strafe - rotation;
-
-        // Normalize motor values
-        double maxVal = std::max({abs(fl), abs(fr), abs(bl), abs(br)});
-        if (maxVal > 127) {
-            fl = fl * 127 / maxVal;
-            fr = fr * 127 / maxVal;
-            bl = bl * 127 / maxVal;
-            br = br * 127 / maxVal;
-        }
-
-        // Send power to motors
-        frontLeft.move(fl * limitspeed);
-        frontRight.move(fr * limitspeed);
-        backLeft.move(bl * limitspeed);
-        backRight.move(br * limitspeed);
-
-        pros::delay(20);
+        pros::delay(10);
     }
 }
