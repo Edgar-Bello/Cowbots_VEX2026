@@ -18,15 +18,37 @@ Rotation verticalRotation(11);
 Rotation verticalRotation2(12);
 Rotation horizontalRotation(13);
 
+ADIDigitalOut pistonIntake('A'); 
+ADIDigitalOut pistonScore('B');
+//ADIDigitalOut pistonDeScore('C');
+//ADIDigitalOut pistonCage('D');
+
 bool buttonPressedOnce = false;
 bool buttonPressedTwice = false;
 double limitspeed = 1.0;
+
+bool isScoringPiston = false;
+bool isIntakePiston = false;
 
 void setBrakeMode(motor_brake_mode_e mode){
     frontLeft.set_brake_mode(mode); //Might have to add the _all to these functions
     frontRight.set_brake_mode(mode);
     backLeft.set_brake_mode(mode);
     backRight.set_brake_mode(mode);
+}
+
+void upperScore(){
+    pistonScore.set_value(true);
+    //pistonCage.set_value(true);
+    delay(500);
+    lowerIntake.move(80);
+    upperIntake.move(80);
+    delay(2000);
+    lowerIntake.move(0);
+    upperIntake.move(0);
+    delay(200);
+    pistonScore.set_value(false);
+    //pistonCage.set_value(false);
 }
 
 
@@ -42,7 +64,7 @@ void on_center_button() {
 
 void initialize() {
     pros::lcd::initialize();
-    pros::lcd::set_text(1, "Hello Cowbots!");
+    pros::lcd::set_text(1, "Hello COWBOTS!");
     pros::lcd::register_btn1_cb(on_center_button);
 
     imu_sensor.reset();
@@ -50,7 +72,13 @@ void initialize() {
     verticalRotation2.reset();
     horizontalRotation.reset();
     verticalRotation.reverse();
+
     setBrakeMode(MOTOR_BRAKE_BRAKE);
+
+    pistonIntake.set_value(false);
+    //pistonCage.set_value(false);
+    //pistonDeScore.set_value(false);
+    pistonScore.set_value(false);
 
     while (imu_sensor.is_calibrating()) {
         pros::delay(10);
@@ -61,8 +89,14 @@ void initialize() {
 void disabled() {
     setBrakeMode(MOTOR_BRAKE_COAST);
 }
-void competition_initialize() {}
-void autonomous() {}
+
+void competition_initialize() {
+
+}
+
+void autonomous() {
+
+}
 
 void opcontrol() {
     while (true) {
@@ -77,11 +111,11 @@ void opcontrol() {
         double strafe   = -master.get_analog(ANALOG_LEFT_X);
         double rotation = -master.get_analog(ANALOG_RIGHT_X);
 
-        //double rad = imu_sensor.get_rotation() * M_PI / 180.0;
+        double rad = imu_sensor.get_rotation() * M_PI / 180.0;
 
-        //double temp = forward * cos(rad) + strafe * sin(rad);
-        //strafe = -forward * sin(rad) + strafe * cos(rad);
-        //forward = temp;
+        double temp = forward * cos(rad) + strafe * sin(rad);
+        strafe = -forward * sin(rad) + strafe * cos(rad);
+        forward = temp;
 
         double fl = forward + strafe + rotation;
         double fr = forward - strafe - rotation;
@@ -109,15 +143,33 @@ void opcontrol() {
 
         if(master.get_digital_new_press(DIGITAL_R1)){
             if(buttonPressedTwice){
-                limitspeed = 0.75;
+                limitspeed = 0.50;
                 buttonPressedTwice = false;
             } else if(buttonPressedOnce){
-                limitspeed = 0.50;
+                limitspeed = 0.75;
                 buttonPressedOnce = false;
                 buttonPressedTwice = true;
             } else {
                 limitspeed = 1.0;
                 buttonPressedOnce = true;
+            }
+        }
+
+        if(master.get_digital_new_press(DIGITAL_L2)){
+            isScoringPiston = !isScoringPiston;
+            if(isScoringPiston){
+                pistonScore.set_value(true);
+            } else {
+                pistonScore.set_value(false);
+            }
+        }
+
+        if(master.get_digital_new_press(DIGITAL_L1)){
+            isIntakePiston = !isIntakePiston;
+            if(isIntakePiston){
+                pistonIntake.set_value(true);
+            } else {
+                pistonIntake.set_value(false);
             }
         }
 
