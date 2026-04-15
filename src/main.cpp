@@ -18,10 +18,10 @@ Rotation verticalRotation(11);
 Rotation verticalRotation2(12);
 Rotation horizontalRotation(13);
 
-ADIDigitalOut pistonIntake('A'); 
-ADIDigitalOut pistonScore('B');
-//ADIDigitalOut pistonDeScore('C');
-//ADIDigitalOut pistonCage('D');
+ADIDigitalOut pistonIntake('B'); 
+ADIDigitalOut pistonScore('A');
+ADIDigitalOut pistonDeScore('D');
+ADIDigitalOut pistonCage('C');
 
 bool buttonPressedOnce = false;
 bool buttonPressedTwice = false;
@@ -29,9 +29,11 @@ double limitspeed = 1.0;
 
 bool isScoringPiston = false;
 bool isIntakePiston = false;
+bool isIntakeCage = false;
+bool isDeScorePiston = false;
 
 void setBrakeMode(motor_brake_mode_e mode){
-    frontLeft.set_brake_mode(mode); //Might have to add the _all to these functions
+    frontLeft.set_brake_mode(mode);
     frontRight.set_brake_mode(mode);
     backLeft.set_brake_mode(mode);
     backRight.set_brake_mode(mode);
@@ -39,18 +41,17 @@ void setBrakeMode(motor_brake_mode_e mode){
 
 void upperScore(){
     pistonScore.set_value(true);
-    //pistonCage.set_value(true);
+    pistonCage.set_value(true);
     delay(500);
-    lowerIntake.move(80);
-    upperIntake.move(80);
+    lowerIntake.move(-80);
+    upperIntake.move(-80);
     delay(2000);
     lowerIntake.move(0);
     upperIntake.move(0);
     delay(200);
     pistonScore.set_value(false);
-    //pistonCage.set_value(false);
+    pistonCage.set_value(false);
 }
-
 
 void on_center_button() {
     static bool pressed = false;
@@ -64,7 +65,7 @@ void on_center_button() {
 
 void initialize() {
     pros::lcd::initialize();
-    pros::lcd::set_text(1, "Hello COWBOTS!");
+    pros::lcd::set_text(1, "Hello Cowbots!");
     pros::lcd::register_btn1_cb(on_center_button);
 
     imu_sensor.reset();
@@ -73,11 +74,14 @@ void initialize() {
     horizontalRotation.reset();
     verticalRotation.reverse();
 
-    setBrakeMode(MOTOR_BRAKE_BRAKE);
+    lowerIntake.set_reversed(true);
+    upperIntake.set_reversed(true);
+
+    setBrakeMode(MOTOR_BRAKE_COAST);
 
     pistonIntake.set_value(false);
-    //pistonCage.set_value(false);
-    //pistonDeScore.set_value(false);
+    pistonCage.set_value(false);
+    pistonDeScore.set_value(false);
     pistonScore.set_value(false);
 
     while (imu_sensor.is_calibrating()) {
@@ -130,22 +134,11 @@ void opcontrol() {
             br = br * 127.0 / maxVal;
         }
 
-        if(master.get_digital(DIGITAL_A)) {
-            upperIntake.move(100); //Max 127
-            lowerIntake.move(100);
-        } else if(master.get_digital(DIGITAL_B)) {
-            upperIntake.move(-100);
-            lowerIntake.move(-100);
-        } else {
-            upperIntake.move(0);
-            lowerIntake.move(0);
-        }
-
-        if(master.get_digital_new_press(DIGITAL_R1)){
-            if(buttonPressedTwice){
+        if (master.get_digital_new_press(E_CONTROLLER_DIGITAL_DOWN)) {
+            if (buttonPressedTwice) {
                 limitspeed = 0.50;
                 buttonPressedTwice = false;
-            } else if(buttonPressedOnce){
+            } else if (buttonPressedOnce) {
                 limitspeed = 0.75;
                 buttonPressedOnce = false;
                 buttonPressedTwice = true;
@@ -155,22 +148,54 @@ void opcontrol() {
             }
         }
 
-        if(master.get_digital_new_press(DIGITAL_L2)){
-            isScoringPiston = !isScoringPiston;
-            if(isScoringPiston){
-                pistonScore.set_value(true);
-            } else {
-                pistonScore.set_value(false);
-            }
+        int intakeSpeed = 0;
+
+        if (master.get_digital(DIGITAL_R1)) {
+            intakeSpeed = 12000;
+        } else if (master.get_digital(DIGITAL_R2)) {
+            intakeSpeed = -12000;
+        } else if (master.get_digital(DIGITAL_X) || master.get_digital(DIGITAL_A)) {
+            intakeSpeed = 12000;
         }
 
-        if(master.get_digital_new_press(DIGITAL_L1)){
-            isIntakePiston = !isIntakePiston;
-            if(isIntakePiston){
-                pistonIntake.set_value(true);
-            } else {
-                pistonIntake.set_value(false);
-            }
+        upperIntake.move_voltage(intakeSpeed);
+        lowerIntake.move_voltage(intakeSpeed);
+
+        if (master.get_digital_new_press(DIGITAL_L1)) {
+            pistonIntake.set_value(true);
+        }
+        if (master.get_digital_new_release(DIGITAL_L1)) {
+            pistonIntake.set_value(false);
+        }
+
+        if (master.get_digital_new_press(DIGITAL_X)) {
+            pistonScore.set_value(true);
+            pistonCage.set_value(true);
+            isIntakeCage = true;
+        }
+        if (master.get_digital_new_release(DIGITAL_X)) {
+            pistonScore.set_value(false);        }
+
+        if (master.get_digital_new_press(DIGITAL_A)) {
+            pistonScore.set_value(true);
+        }
+        if (master.get_digital_new_release(DIGITAL_A)) {
+            pistonScore.set_value(false);
+        }
+
+        if (master.get_digital_new_press(DIGITAL_L2)) {
+            isDeScorePiston = !isDeScorePiston;
+            pistonDeScore.set_value(isDeScorePiston);
+        }
+
+        if (master.get_digital_new_press(DIGITAL_B)) {
+            isIntakeCage = !isIntakeCage;
+            pistonCage.set_value(isIntakeCage);
+        }
+
+        if(master.get_digital_new_press(DIGITAL_UP)){
+            imu_sensor.reset();
+            delay(200);
         }
 
         frontLeft.move((int)(fl * limitspeed));
