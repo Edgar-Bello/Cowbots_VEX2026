@@ -2,7 +2,7 @@
 
 using namespace pros;
 
-constexpr double WHEEL_DIAMETER = 2.125;
+constexpr double WHEEL_DIAMETER = 2.44375; //2.125
 constexpr double WHEEL_CIRC = M_PI * WHEEL_DIAMETER;
 constexpr double TICKS_PER_REV = 36000.0;
 constexpr double INCHES_PER_TICK = WHEEL_CIRC / TICKS_PER_REV;
@@ -28,6 +28,8 @@ ADIDigitalOut pistonIntake('B');
 ADIDigitalOut pistonScore('A');
 ADIDigitalOut pistonDeScore('D');
 ADIDigitalOut pistonCage('C');
+ADIDigitalOut pistonTopDeScore('E');
+
 
 double odomX = 0;
 double odomY = 0;
@@ -41,6 +43,7 @@ bool isScoringPiston = false;
 bool isIntakePiston = false;
 bool isIntakeCage = false;
 bool isDeScorePiston = false;
+bool isTopDeScore = false;
 
 enum class IntakeState { IDLE, INTAKING, RECOVERING };
 IntakeState intakeState = IntakeState::IDLE;
@@ -83,7 +86,7 @@ void setOdometry(int& prevVL, int& prevVR, int& prevH, double& prevIMU) {
     // If your strafe drifts when turning, flip the sign on the dTheta*H_OFFSET term.
     double dStrafe = dH - dTheta * H_OFFSET;
 
-    double avgTheta = odomTheta + dTheta / 2.0;
+    double avgTheta = odomTheta - dTheta / 2.0; //Maybe Postive?
 
     odomX += dStrafe * cos(avgTheta) - dForward * sin(avgTheta);
     odomY += dStrafe * sin(avgTheta) + dForward * cos(avgTheta);
@@ -104,8 +107,8 @@ void moveToPose(double targetX, double targetY, double targetHeadingDeg) {
     constexpr double kP_xy      = 5.0;
     constexpr double kD_xy      = 18.0;
 
-    constexpr double kD_rot     = 10.0;   // Might change to 5.0
-    double kP_rot     = 0.7; // Will be dynamically adjusted based on error
+    constexpr double kD_rot     = -3.0;   // Might change to 5.0, it used to be 10.0
+    double kP_rot     = -1.6; // Will be dynamically adjusted based on error, it used to be 0.8
 
     constexpr double MAX_POWER  = 127.0;
     constexpr double MIN_POWER  = 10.0;
@@ -119,6 +122,7 @@ void moveToPose(double targetX, double targetY, double targetHeadingDeg) {
 
     constexpr uint32_t XY_SETTLE_MS  = 250;
     constexpr uint32_t ROT_SETTLE_MS = 300;
+    constexpr uint32_t TIMEOUT_MS    = 5000;
 
     double targetHeadingRad = (-targetHeadingDeg) * M_PI / 180.0;
 
@@ -193,7 +197,7 @@ void moveToPose(double targetX, double targetY, double targetHeadingDeg) {
         double speedScale = 1.0;
         if (dist < SLOW_RADIUS) {
             speedScale = std::max(dist / SLOW_RADIUS, MIN_POWER / MAX_POWER);
-            kP_rot = 0.045;
+            //kP_rot = 0.055;
         }
 
         // --- MECANUM MIX ---
@@ -217,16 +221,12 @@ void moveToPose(double targetX, double targetY, double targetHeadingDeg) {
         double rot = 0;
 
         // kP switching
-        if (currentAbsErr > 5.0) {
-            rot = kP_rot * rotErrDeg + kD_rot * dRot;
+        if (currentAbsErr < 8) {
+           // kP_rot = 0.065;
+        } 
 
-            rot = std::max(-ROT_MAX, std::min(ROT_MAX, rot));
-
-            // taper near goal
-            if (currentAbsErr < 20.0) {
-                rot *= (currentAbsErr / 20.0);
-            }
-        }
+        rot = kP_rot * rotErrDeg + kD_rot * dRot;
+        rot = std::max(-ROT_MAX, std::min(ROT_MAX, rot));
 
         // --- FINAL MIX ---
         double fl = fl_t + rot;
@@ -287,6 +287,7 @@ void initialize() {
     pistonCage.set_value(false);
     pistonDeScore.set_value(false);
     pistonScore.set_value(false);
+    pistonDeScore.set_value(false);
 
     while (imu_sensor.is_calibrating()) {
         pros::delay(10);
@@ -303,7 +304,10 @@ void competition_initialize() {}
 
 void autonomous() {
     setBrakeMode(MOTOR_BRAKE_HOLD);
-    moveToPose(0, 20, 90);
+    moveToPose(0, 20, 0);
+    moveToPose(0, 40, 90);
+    moveToPose(20, 40, 180);
+    //upperIntake.move_voltage(12000);
 }
 
 void opcontrol() {
@@ -311,7 +315,7 @@ void opcontrol() {
     int prevVL = verticalRotation.get_position();
     int prevVR = verticalRotation2.get_position();
     int prevH  = horizontalRotation.get_position();
-    double prevIMU = -imu_sensor.get_rotation();
+    double prevIMU = imu_sensor.get_rotation();
 
     while (true) {
         lcd::print(
@@ -337,11 +341,18 @@ void opcontrol() {
         double strafe   = master.get_analog(ANALOG_LEFT_X);
         double rotation = master.get_analog(ANALOG_RIGHT_X);
 
-        double rad = (-imu_sensor.get_rotation()) * M_PI / 180.0;
+        double rad = (imu_sensor.get_rotation()) * M_PI / 180.0;
+        rad = rad * limitspeed;
 
         double temp = forward * cos(rad) + strafe * sin(rad);
         strafe = -forward * sin(rad) + strafe * cos(rad);
         forward = temp;
+
+        // When stationary, limit rotation to 50%. Blends smoothly up to 100% as translation increases.
+        double translationMag = sqrt(forward * forward + strafe * strafe);
+        double transScale     = translationMag / 127.0; // 0.0 when still, 1.0 at full speed
+        double rotScale       = 0.50 + 0.50 * transScale; // ranges from 0.50 (still) to 1.0 (full move)
+        rotation = rotation * rotScale;
 
         double fl = forward + strafe + rotation;
         double fr = forward - strafe - rotation;
@@ -357,13 +368,9 @@ void opcontrol() {
         }
 
         if (master.get_digital_new_press(E_CONTROLLER_DIGITAL_DOWN)) {
-            if (buttonPressedTwice) {
-                limitspeed = 0.50;
-                buttonPressedTwice = false;
-            } else if (buttonPressedOnce) {
-                limitspeed = 0.75;
+         if (buttonPressedOnce) {
+                limitspeed = 0.40;
                 buttonPressedOnce = false;
-                buttonPressedTwice = true;
             } else {
                 limitspeed = 1.0;
                 buttonPressedOnce = true;
@@ -374,29 +381,26 @@ void opcontrol() {
 
         if (master.get_digital(DIGITAL_R1)) {
             intakeSpeed = 12000;
-        } else if (master.get_digital(DIGITAL_R2)) {
+        } else if (master.get_digital(DIGITAL_X)) {
             intakeSpeed = -12000;
-        } else if (master.get_digital(DIGITAL_X) || master.get_digital(DIGITAL_A)) {
+        } else if (master.get_digital(DIGITAL_A)) {
             intakeSpeed = 12000;
         }
 
         upperIntake.move_voltage(intakeSpeed);
         lowerIntake.move_voltage(intakeSpeed);
 
-        if (master.get_digital_new_press(E_CONTROLLER_DIGITAL_L1)) {
-            pistonIntake.set_value(true);
-        }
-        if (master.get_digital_new_release(E_CONTROLLER_DIGITAL_L1)) {
-            pistonIntake.set_value(false);
+        if(master.get_digital(E_CONTROLLER_DIGITAL_L1)){
+            pistonTopDeScore.set_value(false);
+        } else{
+            pistonTopDeScore.set_value(isTopDeScore);
         }
 
-        if (master.get_digital_new_press(E_CONTROLLER_DIGITAL_X)) {
-            pistonScore.set_value(true);
-            pistonCage.set_value(true);
-            isIntakeCage = true;
+        if (master.get_digital_new_press(E_CONTROLLER_DIGITAL_R2)) {
+            pistonIntake.set_value(true);
         }
-        if (master.get_digital_new_release(E_CONTROLLER_DIGITAL_X)) {
-            pistonScore.set_value(false);
+        if (master.get_digital_new_release(E_CONTROLLER_DIGITAL_R2)) {
+            pistonIntake.set_value(false);
         }
 
         if (master.get_digital_new_press(E_CONTROLLER_DIGITAL_A)) {
@@ -408,7 +412,9 @@ void opcontrol() {
 
         if (master.get_digital_new_press(E_CONTROLLER_DIGITAL_L2)) {
             isDeScorePiston = !isDeScorePiston;
+            isTopDeScore = !isTopDeScore;
             pistonDeScore.set_value(isDeScorePiston);
+            pistonTopDeScore.set_value(isTopDeScore);
         }
 
         if (master.get_digital_new_press(E_CONTROLLER_DIGITAL_B)) {
@@ -424,10 +430,10 @@ void opcontrol() {
             pros::delay(200);
         }
 
-        frontLeft.move((int)(fl * limitspeed));
-        frontRight.move((int)(fr * limitspeed));
-        backLeft.move((int)(bl * limitspeed));
-        backRight.move((int)(br * limitspeed));
+        frontLeft.move((int)(fl));
+        frontRight.move((int)(fr));
+        backLeft.move((int)(bl));
+        backRight.move((int)(br));
 
         pros::delay(10);
     }
