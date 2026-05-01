@@ -104,18 +104,17 @@ void setOdometry(int& prevVL, int& prevVR, int& prevH, double& prevIMU) {
 void moveToPose(double targetX, double targetY, double targetHeadingDeg) {
 
     // --- TUNING ---
-    constexpr double kP_xy      = 5.0;
+    constexpr double kP_xy      = 40.0;
     constexpr double kD_xy      = 18.0;
 
     constexpr double kD_rot     = -3.0;   // Might change to 5.0, it used to be 10.0
-    double kP_rot     = -1.6; // Will be dynamically adjusted based on error, it used to be 0.8
-
+    double kP_rot     = -1.9;
     constexpr double MAX_POWER  = 127.0;
     constexpr double MIN_POWER  = 10.0;
 
-    constexpr double SLOW_RADIUS = 10.0;
-    constexpr double STOP_DIST   = 0.75;
-    constexpr double STOP_ANGLE  = 5.0;
+    constexpr double SLOW_RADIUS = 10.5;
+    constexpr double STOP_DIST   = 1.5; //Might wanna make it less
+    constexpr double STOP_ANGLE  = 2.5; //Degrees
 
     constexpr double ROT_MAX  = 40.0;
     constexpr double TRANS_MAX = MAX_POWER - ROT_MAX;
@@ -197,7 +196,6 @@ void moveToPose(double targetX, double targetY, double targetHeadingDeg) {
         double speedScale = 1.0;
         if (dist < SLOW_RADIUS) {
             speedScale = std::max(dist / SLOW_RADIUS, MIN_POWER / MAX_POWER);
-            //kP_rot = 0.055;
         }
 
         // --- MECANUM MIX ---
@@ -219,11 +217,6 @@ void moveToPose(double targetX, double targetY, double targetHeadingDeg) {
         prevRotErr = rotErrDeg;
 
         double rot = 0;
-
-        // kP switching
-        if (currentAbsErr < 8) {
-           // kP_rot = 0.065;
-        } 
 
         rot = kP_rot * rotErrDeg + kD_rot * dRot;
         rot = std::max(-ROT_MAX, std::min(ROT_MAX, rot));
@@ -268,7 +261,7 @@ void on_center_button() {
 
 void initialize() {
     pros::lcd::initialize();
-    pros::lcd::set_text(1, "Hello COWBOTS!");
+    pros::lcd::set_text(1, "Hello UTRGV!");
     pros::lcd::register_btn1_cb(on_center_button);
 
     imu_sensor.reset();
@@ -305,7 +298,12 @@ void competition_initialize() {}
 void autonomous() {
     setBrakeMode(MOTOR_BRAKE_HOLD);
     moveToPose(0, 20, 0);
+    upperIntake.move_voltage(12000);
+    lowerIntake.move_voltage(12000);
     moveToPose(0, 40, 90);
+    upperIntake.move_voltage(0);
+    lowerIntake.move_voltage(0);
+    
     moveToPose(20, 40, 180);
     //upperIntake.move_voltage(12000);
 }
@@ -437,4 +435,56 @@ void opcontrol() {
 
         pros::delay(10);
     }
+
+
+/*  Function for intake stall detection and recovery
+
+uint32_t now = pros::millis();
+
+if (intakeState == IntakeState::RECOVERING) {
+    // Keep outtaking until recovery duration is done
+    upperIntake.move_voltage(-12000);
+    lowerIntake.move_voltage(-12000);
+
+    if (now - recoverStart >= RECOVER_DURATION_MS) {
+        intakeState    = IntakeState::INTAKING;
+        posCheckStart  = now;
+        posAtCheckStart = upperIntake.get_position();
+    }
+
+} else if (intakeSpeed > 0) {
+    intakeState = IntakeState::INTAKING;
+    upperIntake.move_voltage(intakeSpeed);
+    lowerIntake.move_voltage(intakeSpeed);
+
+    // Every STALL_CHECK_WINDOW ms, compare how much the encoder moved
+    if (now - posCheckStart >= STALL_CHECK_WINDOW) {
+        double currentPos = upperIntake.get_position();
+        double delta      = std::abs(currentPos - posAtCheckStart);
+
+        if (delta < STALL_POS_THRESHOLD) {
+            // Barely moved — stall confirmed, start recovery
+            intakeState  = IntakeState::RECOVERING;
+            recoverStart = now;
+        }
+
+        // Reset window regardless
+        posCheckStart   = now;
+        posAtCheckStart = currentPos;
+    }
+
+} else {
+    // Idle or outtaking — pass through, reset stall tracking
+    intakeState     = IntakeState::IDLE;
+    posCheckStart   = now;
+    posAtCheckStart = upperIntake.get_position();
+    upperIntake.move_voltage(intakeSpeed);
+    lowerIntake.move_voltage(intakeSpeed);
 }
+
+
+*/
+
+}
+
+
