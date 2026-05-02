@@ -2,19 +2,19 @@
 
 using namespace pros;
 
-constexpr double WHEEL_DIAMETER = 2.44375; //2.125
+constexpr double WHEEL_DIAMETER = 2.0; //2.125
 constexpr double WHEEL_CIRC = M_PI * WHEEL_DIAMETER;
 constexpr double TICKS_PER_REV = 36000.0;
 constexpr double INCHES_PER_TICK = WHEEL_CIRC / TICKS_PER_REV;
-constexpr double H_OFFSET = 5.81;
+constexpr double H_OFFSET = 5.75;
 
 MotorGroup frontLeft({-3, 4}, MotorGearset::blue);
 MotorGroup frontRight({1, -2}, MotorGearset::blue);
 MotorGroup backLeft({-5, 6}, MotorGearset::blue);
 MotorGroup backRight({7, -8}, MotorGearset::blue);
 
-Motor upperIntake(9, MotorGearset::green);
-Motor lowerIntake(10, MotorGearset::green);
+Motor upperIntake(10, MotorGearset::green);
+Motor lowerIntake(9, MotorGearset::green);
 
 Controller master(E_CONTROLLER_MASTER);
 
@@ -30,14 +30,15 @@ ADIDigitalOut pistonDeScore('D');
 ADIDigitalOut pistonCage('C');
 ADIDigitalOut pistonTopDeScore('E');
 
-
 double odomX = 0;
 double odomY = 0;
-double odomTheta = 0; // radians, CCW positive (internal)
+double odomTheta = M_PI; // radians, CCW positive (internal)
 
 bool buttonPressedOnce = false;
 bool buttonPressedTwice = false;
 double limitspeed = 1.0;
+
+double posAtCheckStartLower = 0;
 
 bool isScoringPiston = false;
 bool isIntakePiston = false;
@@ -101,29 +102,31 @@ void setOdometry(int& prevVL, int& prevVR, int& prevH, double& prevIMU) {
     prevIMU = currIMU;
 }
 
-void moveToPose(double targetX, double targetY, double targetHeadingDeg) {
+void moveToPoseWhileIntaking(double targetX, double targetY, double targetHeadingDeg, bool upperIntaking, bool lowerIntaking) {
 
-    // --- TUNING ---
     constexpr double kP_xy      = 40.0;
     constexpr double kD_xy      = 18.0;
 
     constexpr double kD_rot     = -3.0;   // Might change to 5.0, it used to be 10.0
-    double kP_rot     = -1.9;
+    double kP_rot     = -1.95;
     constexpr double MAX_POWER  = 127.0;
     constexpr double MIN_POWER  = 10.0;
 
     constexpr double SLOW_RADIUS = 10.5;
-    constexpr double STOP_DIST   = 1.5; //Might wanna make it less
-    constexpr double STOP_ANGLE  = 2.5; //Degrees
+    constexpr double STOP_DIST   = 0.8; //Might wanna make it less
+    constexpr double STOP_ANGLE  = 2.0; //Degrees
 
     constexpr double ROT_MAX  = 40.0;
     constexpr double TRANS_MAX = MAX_POWER - ROT_MAX;
 
     constexpr uint32_t XY_SETTLE_MS  = 250;
     constexpr uint32_t ROT_SETTLE_MS = 300;
-    constexpr uint32_t TIMEOUT_MS    = 5000;
+    constexpr uint32_t TIMEOUT_MS    = 3000;
 
     double targetHeadingRad = (-targetHeadingDeg) * M_PI / 180.0;
+
+    int upperIntakeSpeed = upperIntaking ? 12000 : 0;
+    int lowerIntakeSpeed = lowerIntaking ? 12000 : 0;
 
     double prevXErr = 0;
     double prevYErr = 0;
@@ -134,7 +137,6 @@ void moveToPose(double targetX, double targetY, double targetHeadingDeg) {
     int prevH      = horizontalRotation.get_position();
     double prevIMU = -imu_sensor.get_rotation();
 
-    // --- INITIAL ROTATION ERROR ---
     double initialRotErr = targetHeadingRad - odomTheta;
     while (initialRotErr >  M_PI) initialRotErr -= 2 * M_PI;
     while (initialRotErr < -M_PI) initialRotErr += 2 * M_PI;
@@ -146,16 +148,67 @@ void moveToPose(double targetX, double targetY, double targetHeadingDeg) {
     bool xyFirstHit  = false;
     bool rotFirstHit = false;
 
+    uint32_t loopStart = pros::millis();
+
     while (true) {
+
+    if (pros::millis() - loopStart >= TIMEOUT_MS) break;
+
+    uint32_t now = pros::millis();
+
+   if (intakeState == IntakeState::RECOVERING) {
+    upperIntake.move_voltage(-9000);
+    lowerIntake.move_voltage(-9000);
+
+    if (now - recoverStart >= RECOVER_DURATION_MS) {
+        intakeState          = IntakeState::INTAKING;
+        posCheckStart        = now;
+        posAtCheckStart      = upperIntake.get_position();
+        posAtCheckStartLower = lowerIntake.get_position();
+    }
+
+    } else if (upperIntakeSpeed > 0 || lowerIntakeSpeed > 0) {
+    intakeState = IntakeState::INTAKING;
+    upperIntake.move_voltage(upperIntakeSpeed);
+    lowerIntake.move_voltage(lowerIntakeSpeed);
+
+    if (now - posCheckStart >= STALL_CHECK_WINDOW) {
+        double upperPos   = upperIntake.get_position();
+        double lowerPos   = lowerIntake.get_position();
+        double upperDelta = std::abs(upperPos - posAtCheckStart);
+        double lowerDelta = std::abs(lowerPos - posAtCheckStartLower);
+
+        // Only check stall on motors that are actually running
+        bool upperStalled = upperIntakeSpeed > 0 && upperDelta < STALL_POS_THRESHOLD;
+        bool lowerStalled = lowerIntakeSpeed > 0 && lowerDelta < STALL_POS_THRESHOLD;
+
+        if (upperStalled || lowerStalled) {
+            intakeState  = IntakeState::RECOVERING;
+            recoverStart = now;
+        }
+
+        posCheckStart        = now;
+        posAtCheckStart      = upperPos;
+        posAtCheckStartLower = lowerPos;
+    }
+
+    } else {
+    intakeState          = IntakeState::IDLE;
+    posCheckStart        = now;
+    posAtCheckStart      = upperIntake.get_position();
+    posAtCheckStartLower = lowerIntake.get_position();
+    upperIntake.move_voltage(upperIntakeSpeed);
+    lowerIntake.move_voltage(lowerIntakeSpeed);
+    }
+
+
 
         setOdometry(prevVL, prevVR, prevH, prevIMU);
 
-        // --- POSITION ERROR ---
         double dx   = targetX - odomX;
         double dy   = targetY - odomY;
         double dist = sqrt(dx * dx + dy * dy);
 
-        // --- ROTATION ERROR ---
         double rotErr = targetHeadingRad - odomTheta;
         while (rotErr >  M_PI) rotErr -= 2 * M_PI;
         while (rotErr < -M_PI) rotErr += 2 * M_PI;
@@ -163,7 +216,6 @@ void moveToPose(double targetX, double targetY, double targetHeadingDeg) {
 
         double currentAbsErr = fabs(rotErrDeg);
 
-        // --- SETTLING LOGIC ---
         if (dist < STOP_DIST && !xyFirstHit) {
             xyFirstHit = true;
             xySettleStart = pros::millis();
@@ -179,11 +231,9 @@ void moveToPose(double targetX, double targetY, double targetHeadingDeg) {
 
         if (xyDone && rotDone) break;
 
-        // --- FIELD -> ROBOT FRAME ---
         double robotX =  dx * cos(odomTheta) + dy * sin(odomTheta);
         double robotY = -dx * sin(odomTheta) + dy * cos(odomTheta);
 
-        // --- TRANSLATION PD ---
         double dX = robotX - prevXErr;
         double dY = robotY - prevYErr;
         prevXErr = robotX;
@@ -192,8 +242,7 @@ void moveToPose(double targetX, double targetY, double targetHeadingDeg) {
         double vx = kP_xy * robotX + kD_xy * dX;
         double vy = kP_xy * robotY + kD_xy * dY;
 
-        // --- SLOW DOWN NEAR TARGET ---
-        double speedScale = 1.0;
+        double speedScale = 1.0; //Might wanna remove this part
         if (dist < SLOW_RADIUS) {
             speedScale = std::max(dist / SLOW_RADIUS, MIN_POWER / MAX_POWER);
         }
@@ -212,7 +261,6 @@ void moveToPose(double targetX, double targetY, double targetHeadingDeg) {
             br_t = (br_t / maxTrans) * TRANS_MAX * speedScale;
         }
 
-        // --- ROTATION PD WITH DYNAMIC kP ---
         double dRot = rotErrDeg - prevRotErr;
         prevRotErr = rotErrDeg;
 
@@ -221,7 +269,6 @@ void moveToPose(double targetX, double targetY, double targetHeadingDeg) {
         rot = kP_rot * rotErrDeg + kD_rot * dRot;
         rot = std::max(-ROT_MAX, std::min(ROT_MAX, rot));
 
-        // --- FINAL MIX ---
         double fl = fl_t + rot;
         double fr = fr_t - rot;
         double bl = bl_t + rot;
@@ -235,10 +282,10 @@ void moveToPose(double targetX, double targetY, double targetHeadingDeg) {
             br = br / maxFinal * MAX_POWER;
         }
 
-        frontLeft.move((int)fl);
-        frontRight.move((int)fr);
-        backLeft.move((int)bl);
-        backRight.move((int)br);
+        frontLeft.move((int)fl * limitspeed);
+        frontRight.move((int)fr * limitspeed);
+        backLeft.move((int)bl * limitspeed); //Mihgt have to remove limitspeed
+        backRight.move((int)br * limitspeed);
 
         delay(10);
     }
@@ -247,6 +294,8 @@ void moveToPose(double targetX, double targetY, double targetHeadingDeg) {
     frontRight.brake();
     backLeft.brake();
     backRight.brake();
+    lowerIntake.move_voltage(0);
+    upperIntake.move_voltage(0);
 }
 
 void on_center_button() {
@@ -297,18 +346,34 @@ void competition_initialize() {}
 
 void autonomous() {
     setBrakeMode(MOTOR_BRAKE_HOLD);
-    moveToPose(0, 20, 0);
-    upperIntake.move_voltage(12000);
+    moveToPoseWhileIntaking(-31, 4, 180, false, false);
+    pistonIntake.set_value(true);
+    delay(200);
+    moveToPoseWhileIntaking(-31, -6, 180, false, true);
     lowerIntake.move_voltage(12000);
-    moveToPose(0, 40, 90);
-    upperIntake.move_voltage(0);
+    delay(200);
     lowerIntake.move_voltage(0);
-    
-    moveToPose(20, 40, 180);
-    //upperIntake.move_voltage(12000);
+    moveToPoseWhileIntaking(-31, 4, 180, false, true);
+    lowerIntake.move_voltage(12000);
+    delay(200);
+    lowerIntake.move_voltage(0);
+    pistonIntake.set_value(false);
+    delay(200);
+    moveToPoseWhileIntaking(-31, 4, 0, false, false);
+    pistonCage.set_value(true);
+    pistonScore.set_value(true);
+    delay(200);
+    moveToPoseWhileIntaking(-31, 23, 0, false, false);
+    lowerIntake.move_voltage(12000);
+    upperIntake.move_voltage(12000);
 }
 
 void opcontrol() {
+    imu_sensor.reset();
+    while (imu_sensor.is_calibrating()) {
+        pros::delay(10);
+    }
+        pros::delay(200);
 
     int prevVL = verticalRotation.get_position();
     int prevVR = verticalRotation2.get_position();
@@ -350,7 +415,7 @@ void opcontrol() {
         double translationMag = sqrt(forward * forward + strafe * strafe);
         double transScale     = translationMag / 127.0; // 0.0 when still, 1.0 at full speed
         double rotScale       = 0.50 + 0.50 * transScale; // ranges from 0.50 (still) to 1.0 (full move)
-        rotation = rotation * rotScale;
+        //rotation = rotation * rotScale;  //Not decrease rotation speed
 
         double fl = forward + strafe + rotation;
         double fr = forward - strafe - rotation;
@@ -365,21 +430,11 @@ void opcontrol() {
             br = br * 127.0 / maxVal;
         }
 
-        if (master.get_digital_new_press(E_CONTROLLER_DIGITAL_DOWN)) {
-         if (buttonPressedOnce) {
-                limitspeed = 0.40;
-                buttonPressedOnce = false;
-            } else {
-                limitspeed = 1.0;
-                buttonPressedOnce = true;
-            }
-        }
-
         int intakeSpeed = 0;
 
-        if (master.get_digital(DIGITAL_R1)) {
+        if (master.get_digital(DIGITAL_R2) || master.get_digital(DIGITAL_X)) {
             intakeSpeed = 12000;
-        } else if (master.get_digital(DIGITAL_X)) {
+        } else if (master.get_digital(DIGITAL_B)) {
             intakeSpeed = -12000;
         } else if (master.get_digital(DIGITAL_A)) {
             intakeSpeed = 12000;
@@ -388,34 +443,34 @@ void opcontrol() {
         upperIntake.move_voltage(intakeSpeed);
         lowerIntake.move_voltage(intakeSpeed);
 
-        if(master.get_digital(E_CONTROLLER_DIGITAL_L1)){
+        if(master.get_digital(E_CONTROLLER_DIGITAL_R1)){
             pistonTopDeScore.set_value(false);
         } else{
             pistonTopDeScore.set_value(isTopDeScore);
         }
 
-        if (master.get_digital_new_press(E_CONTROLLER_DIGITAL_R2)) {
+        if (master.get_digital_new_press(E_CONTROLLER_DIGITAL_L2)) {
             pistonIntake.set_value(true);
         }
-        if (master.get_digital_new_release(E_CONTROLLER_DIGITAL_R2)) {
+        if (master.get_digital_new_release(E_CONTROLLER_DIGITAL_L2)) {
             pistonIntake.set_value(false);
         }
 
-        if (master.get_digital_new_press(E_CONTROLLER_DIGITAL_A)) {
+        if (master.get_digital_new_press(E_CONTROLLER_DIGITAL_A) || master.get_digital_new_press(E_CONTROLLER_DIGITAL_X)) {
             pistonScore.set_value(true);
         }
-        if (master.get_digital_new_release(E_CONTROLLER_DIGITAL_A)) {
+        if (master.get_digital_new_release(E_CONTROLLER_DIGITAL_A) || master.get_digital_new_release(E_CONTROLLER_DIGITAL_X)) {
             pistonScore.set_value(false);
         }
 
-        if (master.get_digital_new_press(E_CONTROLLER_DIGITAL_L2)) {
+        if (master.get_digital_new_press(E_CONTROLLER_DIGITAL_L1)) {
             isDeScorePiston = !isDeScorePiston;
             isTopDeScore = !isTopDeScore;
             pistonDeScore.set_value(isDeScorePiston);
             pistonTopDeScore.set_value(isTopDeScore);
         }
 
-        if (master.get_digital_new_press(E_CONTROLLER_DIGITAL_B)) {
+        if (master.get_digital_new_press(E_CONTROLLER_DIGITAL_Y)) {
             isIntakeCage = !isIntakeCage;
             pistonCage.set_value(isIntakeCage);
         }
@@ -435,56 +490,6 @@ void opcontrol() {
 
         pros::delay(10);
     }
-
-
-/*  Function for intake stall detection and recovery
-
-uint32_t now = pros::millis();
-
-if (intakeState == IntakeState::RECOVERING) {
-    // Keep outtaking until recovery duration is done
-    upperIntake.move_voltage(-12000);
-    lowerIntake.move_voltage(-12000);
-
-    if (now - recoverStart >= RECOVER_DURATION_MS) {
-        intakeState    = IntakeState::INTAKING;
-        posCheckStart  = now;
-        posAtCheckStart = upperIntake.get_position();
-    }
-
-} else if (intakeSpeed > 0) {
-    intakeState = IntakeState::INTAKING;
-    upperIntake.move_voltage(intakeSpeed);
-    lowerIntake.move_voltage(intakeSpeed);
-
-    // Every STALL_CHECK_WINDOW ms, compare how much the encoder moved
-    if (now - posCheckStart >= STALL_CHECK_WINDOW) {
-        double currentPos = upperIntake.get_position();
-        double delta      = std::abs(currentPos - posAtCheckStart);
-
-        if (delta < STALL_POS_THRESHOLD) {
-            // Barely moved — stall confirmed, start recovery
-            intakeState  = IntakeState::RECOVERING;
-            recoverStart = now;
-        }
-
-        // Reset window regardless
-        posCheckStart   = now;
-        posAtCheckStart = currentPos;
-    }
-
-} else {
-    // Idle or outtaking — pass through, reset stall tracking
-    intakeState     = IntakeState::IDLE;
-    posCheckStart   = now;
-    posAtCheckStart = upperIntake.get_position();
-    upperIntake.move_voltage(intakeSpeed);
-    lowerIntake.move_voltage(intakeSpeed);
-}
-
-
-*/
-
 }
 
 
