@@ -113,7 +113,7 @@ void moveToPoseWhileIntaking(double targetX, double targetY, double targetHeadin
     constexpr double MIN_POWER  = 10.0;
 
     constexpr double SLOW_RADIUS = 10.5;
-    constexpr double STOP_DIST   = 0.8; //Might wanna make it less
+    constexpr double STOP_DIST   = 0.3; //Might wanna make it less
     constexpr double STOP_ANGLE  = 2.0; //Degrees
 
     constexpr double ROT_MAX  = 40.0;
@@ -200,7 +200,6 @@ void moveToPoseWhileIntaking(double targetX, double targetY, double targetHeadin
     upperIntake.move_voltage(upperIntakeSpeed);
     lowerIntake.move_voltage(lowerIntakeSpeed);
     }
-
 
 
         setOdometry(prevVL, prevVR, prevH, prevIMU);
@@ -349,36 +348,39 @@ void autonomous() {
     moveToPoseWhileIntaking(-31, 4, 180, false, false);
     pistonIntake.set_value(true);
     delay(200);
-    moveToPoseWhileIntaking(-31, -6, 180, false, true);
+    moveToPoseWhileIntaking(-31, -6, 180, false, false);
     lowerIntake.move_voltage(12000);
-    delay(200);
+    upperIntake.move_voltage(12000);
+    delay(1500);
     lowerIntake.move_voltage(0);
+    upperIntake.move_voltage(0);
     moveToPoseWhileIntaking(-31, 4, 180, false, true);
-    lowerIntake.move_voltage(12000);
-    delay(200);
-    lowerIntake.move_voltage(0);
     pistonIntake.set_value(false);
     delay(200);
-    moveToPoseWhileIntaking(-31, 4, 0, false, false);
+    moveToPoseWhileIntaking(-32, 4, 0, false, false);
     pistonCage.set_value(true);
     pistonScore.set_value(true);
     delay(200);
-    moveToPoseWhileIntaking(-31, 23, 0, false, false);
+    moveToPoseWhileIntaking(-32, 23.5, 0, false, false);
     lowerIntake.move_voltage(12000);
     upperIntake.move_voltage(12000);
-}
-
-void opcontrol() {
+    delay(5000);
+    lowerIntake.move_voltage(0);
+    upperIntake.move_voltage(0);
     imu_sensor.reset();
     while (imu_sensor.is_calibrating()) {
         pros::delay(10);
     }
+}
+
+void opcontrol() {
         pros::delay(200);
 
     int prevVL = verticalRotation.get_position();
     int prevVR = verticalRotation2.get_position();
     int prevH  = horizontalRotation.get_position();
     double prevIMU = imu_sensor.get_rotation();
+    pistonScore.set_value(false);
 
     while (true) {
         lcd::print(
