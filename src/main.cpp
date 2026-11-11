@@ -337,6 +337,7 @@ void initialize() {
     pros::delay(200);
 }
 
+//Disabled function
 void disabled() {
     setBrakeMode(MOTOR_BRAKE_COAST);
 }
